@@ -6,31 +6,32 @@ module deepbook::book {
     use std::string::{Self, String};
     use sui::{coin, balance::{Self, Balance}};
     use sui::tx_context::{Self, TxContext};
-    use sui::object::{Self, UID};
+    use sui::object::{Self, UID, ID};
+    use sui::transfer;
     const NOT_MANAGER: u64 = 1;
     const INVALID_PRICE: u64 = 2;
-    const INVALID_SUPPLY: u64 = 3;
-    const INVALID_ID: u64 = 4;
-    const INVALID_QUANTITY: u64 = 5;
+    const INVALID_SUPPLY : u64 = 3;
+    const INVALID_ID : u64 = 4;
+    const INVALID_QUANTITY : u64 = 5;
     const INSUFFICIENT_BALANCE: u64 = 6;
     const STOCK_OUT: u64 = 7;
-    const INVALID_AMOUNT: u64 = 8;
+    const INVALID_AMOUNT : u64 = 8;
     /**
      * Represents a Restaurant with a unique identifier, management ID, balance, and list of products.
      */
     public struct Restaurant has key {
         id: UID,
-        management_id: UID,
+        managementId: ID,
         balance: Balance<SUI>,
         products: vector<Product>,
-        product_count: u64,
+        product_count: u64
     }
     /**
      * Represents the Management of a restaurant with a unique identifier and a reference to the restaurant ID.
      */
     public struct Management has key {
         id: UID,
-        restaurant_id: UID,
+        restaurant: ID,
     }
     /**
      * Represents a Product with a unique identifier, title, description, price, stock status, category, total supply, and availability.
@@ -40,34 +41,36 @@ module deepbook::book {
         title: String,
         description: String,
         price: u64,
-        in_stock: bool,
+        inStock: bool,
         category: u8,
         total_supply: u64,
-        available: u64,
+        available: u64
     }
     /**
      * Represents an Invoice with a unique identifier, restaurant ID, and product ID.
      */
     public struct Invoice has key {
         id: UID,
-        restaurant_id: UID,
-        product_id: u64,
+        restaurant_id: ID,
+        product_id: u64
     }
     /**
      * Creates a new restaurant and transfers ownership to the recipient address.
      * @param recipient - The address to which the restaurant is transferred.
      * @param ctx - The transaction context.
      */
-    public fun create_restaurant(recipient: address, ctx: &mut TxContext) {
-        let restaurant_uid = object::new(ctx);
-        let manager_uid = object::new(ctx);
+    public entry fun create_restaurant(recipient: address, ctx: &mut TxContext) {
+        let restaurantUID = object::new(ctx);
+        let managerUID = object::new(ctx);
+        let restaurantID = object::uid_to_inner(&restaurantUID);
+        let managerID = object::uid_to_inner(&managerUID);
         transfer::transfer(Management {
-            id: manager_uid,
-            restaurant_id: restaurant_uid,
-        }, recipient);
+            id: managerUID,
+            restaurant: restaurantID
+         }, recipient);
         transfer::share_object(Restaurant {
-            id: restaurant_uid,
-            management_id: manager_uid,
+            id: restaurantUID,
+            managementId: managerID,
             balance: balance::zero<SUI>(),
             products: vector::empty(),
             product_count: 0,
@@ -83,7 +86,7 @@ module deepbook::book {
      * @param supply - The supply quantity of the product.
      * @param category - The category of the product.
      */
-    public fun add_product(
+    public entry fun add_product(
         restaurant: &mut Restaurant,
         manager: &Management,
         title: vector<u8>,
@@ -91,8 +94,9 @@ module deepbook::book {
         price: u64,
         supply: u64,
         category: u8,
+        ctx: &mut TxContext
     ) {
-        assert!(restaurant.management_id == manager.id, NOT_MANAGER);
+        assert!(restaurant.managementId == object::uid_to_inner(&manager.id), NOT_MANAGER);
         assert!(price > 0, INVALID_PRICE);
         assert!(supply > 0, INVALID_SUPPLY);
         let item_id = restaurant.products.length();
@@ -101,13 +105,14 @@ module deepbook::book {
             title: string::utf8(title),
             description: string::utf8(description),
             price: price,
-            in_stock: true,
+            inStock: true,
             category: category,
             total_supply: supply,
             available: supply,
         };
         restaurant.products.push_back(product);
         restaurant.product_count = restaurant.product_count + 1;
+        event::emit(&format!("Product {} added to Restaurant {}", item_id, object::uid_to_inner(&restaurant.id)), ctx);
     }
     /**
      * Removes a product from the restaurant's stock.
@@ -115,14 +120,16 @@ module deepbook::book {
      * @param manager - The management struct for the restaurant.
      * @param product_id - The identifier of the product to be removed.
      */
-    public fun remove_product_from_stock(
+    public entry fun remove_product_from_stock(
         restaurant: &mut Restaurant,
         manager: &Management,
         product_id: u64,
+        ctx: &mut TxContext
     ) {
-        assert!(restaurant.management_id == manager.id, NOT_MANAGER);
+        assert!(restaurant.managementId == object::uid_to_inner(&manager.id), NOT_MANAGER);
         assert!(product_id < restaurant.products.length(), INVALID_ID);
-        restaurant.products[product_id].in_stock = false;
+        restaurant.products[product_id].inStock = false;
+        event::emit(&format!("Product {} removed from stock", product_id), ctx);
     }
     /**
      * Restocks a product in the restaurant.
@@ -130,14 +137,35 @@ module deepbook::book {
      * @param manager - The management struct for the restaurant.
      * @param product_id - The identifier of the product to be restocked.
      */
-    public fun restock_product(
+    public entry fun restock_product(
         restaurant: &mut Restaurant,
         manager: &Management,
         product_id: u64,
+        ctx: &mut TxContext
     ) {
-        assert!(restaurant.management_id == manager.id, NOT_MANAGER);
+        assert!(restaurant.managementId == object::uid_to_inner(&manager.id), NOT_MANAGER);
         assert!(product_id < restaurant.products.length(), INVALID_ID);
-        restaurant.products[product_id].in_stock = true;
+        restaurant.products[product_id].inStock = true;
+        event::emit(&format!("Product {} restocked", product_id), ctx);
+    }
+    /**
+     * Changes the category of a product in the restaurant.
+     * @param restaurant - The restaurant in which the product category is changed.
+     * @param manager - The management struct for the restaurant.
+     * @param product_id - The identifier of the product whose category is changed.
+     * @param category - The new category of the product.
+     */
+    public entry fun change_product_category(
+        restaurant: &mut Restaurant,
+        manager: &Management,
+        product_id: u64,
+        category: u8,
+        ctx: &mut TxContext
+    ) {
+        assert!(restaurant.managementId == object::uid_to_inner(&manager.id), NOT_MANAGER);
+        assert!(product_id < restaurant.products.length(), INVALID_ID);
+        restaurant.products[product_id].category = category;
+        event::emit(&format!("Product {} category changed to {}", product_id, category), ctx);
     }
     /**
      * Buys a product from the restaurant.
@@ -148,13 +176,13 @@ module deepbook::book {
      * @param coin - The coin used for the transaction.
      * @param ctx - The transaction context.
      */
-    public fun buy_product(
+    public entry fun buy_product(
         restaurant: &mut Restaurant,
         product_id: u64,
         quantity: u64,
         recipient: address,
         coin: &mut coin::Coin<SUI>,
-        ctx: &mut TxContext,
+        ctx: &mut TxContext
     ) {
         assert!(product_id < restaurant.products.length(), INVALID_ID);
         let product = &mut restaurant.products[product_id];
@@ -162,21 +190,24 @@ module deepbook::book {
         let value = coin.value();
         let total_price = product.price * quantity;
         assert!(value >= total_price, INSUFFICIENT_BALANCE);
-        assert!(product.in_stock, STOCK_OUT);
+        assert!(product.inStock == true, STOCK_OUT);
         product.available = product.available - quantity;
         let payment = coin.split(total_price, ctx);
         coin::put(&mut restaurant.balance, payment);
-        for i in 0..quantity {
+        let mut i = 0_u64;
+        while (i < quantity) {
             let product_uid = object::new(ctx);
             transfer::transfer(Invoice {
                 id: product_uid,
-                restaurant_id: restaurant.id,
-                product_id: product_id,
+                restaurant_id: object::uid_to_inner(&restaurant.id),
+                product_id: product_id
             }, recipient);
+            i = i + 1;
+        };
+        if (product.available == 0) {
+            vector::borrow_mut(&mut restaurant.products, product_id).inStock = false;
         }
-        if product.available == 0 {
-            restaurant.products[product_id].in_stock = false;
-        }
+        event::emit(&format!("{} units of Product {} bought by {}", quantity, product_id, recipient), ctx);
     }
     /**
      * Transfers an amount from the restaurant's balance to the recipient.
@@ -186,17 +217,37 @@ module deepbook::book {
      * @param recipient - The address of the recipient.
      * @param ctx - The transaction context.
      */
-    public fun transfer_from_restaurant(
+    public entry fun transfer_from_restaurant(
         restaurant: &mut Restaurant,
         manager: &Management,
         amount: u64,
         recipient: address,
-        ctx: &mut TxContext,
+        ctx: &mut TxContext
     ) {
-        assert!(restaurant.management_id == manager.id, NOT_MANAGER);
+        assert!(restaurant.managementId == object::uid_to_inner(&manager.id), NOT_MANAGER);
         assert!(amount > 0 && amount <= restaurant.balance.value(), INVALID_AMOUNT);
         let take_coin = coin::take(&mut restaurant.balance, amount, ctx);
         transfer::public_transfer(take_coin, recipient);
+        event::emit(&format!("Transferred {} from Restaurant {} to {}", amount, object::uid_to_inner(&restaurant.id), recipient), ctx);
+    }
+    /**
+     * Cancels a product in the restaurant.
+     * @param restaurant - The restaurant from which the product is canceled.
+     * @param manager - The management struct for the restaurant.
+     * @param product_id - The identifier of the product to be canceled.
+     */
+    public entry fun cancel_product(
+        restaurant: &mut Restaurant,
+        manager: &Management,
+        product_id: u64,
+        ctx: &mut TxContext
+    ) {
+        assert!(restaurant.managementId == object::uid_to_inner(&manager.id), NOT_MANAGER);
+        assert!(product_id < restaurant.products.length(), INVALID_ID);
+        let product = &mut restaurant.products[product_id];
+        product.inStock = false;
+        product.available = 0;
+        event::emit(&format!("Product {} canceled", product_id), ctx);
     }
     /**
      * Checks the availability of a product.
@@ -212,6 +263,23 @@ module deepbook::book {
      * @returns True if the product is in stock, false otherwise.
      */
     public fun check_product_stock(product: &Product): bool {
-        product.in_stock
+        product.inStock
+    }
+    /**
+     * Event emission for logging important actions
+     * @param msg - The message to be emitted as an event
+     * @param ctx - The transaction context
+     */
+    public fun emit_event(msg: String, ctx: &mut TxContext) {
+        event::emit(msg, ctx);
     }
 }
+
+
+
+
+
+
+
+
+
